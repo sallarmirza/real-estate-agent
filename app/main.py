@@ -1,11 +1,4 @@
-"""FastAPI app entrypoint.
-
-Run with:  python run_server.py
-or:        uvicorn app.main:app --reload
-"""
-
 import logging
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

@@ -124,6 +124,10 @@ def save_lead_info(
         notes=notes,
         stage=stage,
         score=score,
+        message_count=sum(
+            1 for message in state.get("messages", [])
+            if getattr(message, "type", None) == "human"
+        ),
         **merged,
     )
 

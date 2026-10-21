@@ -1,44 +1,82 @@
-"""Export captured leads to CSV.
+"""Email notification when a lead's required contact details are complete."""
 
-Run:  python -m reporting.leads_report [stage]
+import logging
+import os
+import threading
+from datetime import datetime, timezone
+from typing import Optional
 
-Examples:
-    python -m reporting.leads_report                # all leads
-    python -m reporting.leads_report qualified       # only qualified leads
+from .email_module import send_email as dispatch
 
-This is the simplest possible "dashboard" -- a CSV your sales team can
-open in Excel/Sheets. The GET /admin/leads endpoint (app/main.py) serves
-the same data as JSON if you'd rather build a real dashboard on top.
-"""
+logger = logging.getLogger(__name__)
 
-import csv
-import sys
-from pathlib import Path
+REPORT_RECIPIENTS = ["salar@m3hive.com"]
 
-from memory.long_term_memory import list_leads
-
-FIELDS = [
-    "user_id", "platform", "name", "phone", "email",
-    "property_type", "city_or_area", "budget_range", "financing_method",
-    "purchase_timeline", "preferred_call_time", "site_visit_requested",
-    "stage", "score", "message_count", "handoff_requested", "updated_at",
+# (label, lead key) pairs printed in the email, in this order
+LEAD_FIELDS = [
+    ("Name", "name"),
+    ("Phone", "phone"),
+    ("Email", "email"),
+    ("Platform", "platform"),
+    ("Property Type", "property_type"),
+    ("City/Area", "city_or_area"),
+    ("Budget", "budget_range"),
+    ("Financing", "financing_method"),
+    ("Timeline", "purchase_timeline"),
+    ("Preferred Call Time", "preferred_call_time"),
+    ("Site Visit Requested", "site_visit_requested"),
+    ("Score", "score"),
+    ("Handoff Requested", "handoff_requested"),
 ]
 
 
-def export_csv(stage: str | None = None, out_path: str = "data/leads_export.csv") -> str:
-    leads = list_leads(stage=stage)
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+def format_lead_text(lead: dict) -> str:
+    """Build the plain-text email body for a single lead."""
+    lines = [
+        "LEAD CONTACT DETAILS COMPLETED",
+        f"Received at: {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}",
+        "",
+    ]
+    for label, key in LEAD_FIELDS:
+        value = lead.get(key)
+        lines.append(f"{label}: {value if value not in (None, '') else 'N/A'}")
+    return "\n".join(lines)
 
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        for lead in leads:
-            writer.writerow(lead)
 
-    return out_path
+def _send(lead: dict, recipients: list[str]) -> None:
+    try:
+        sent = dispatch(
+            subject=f"New Lead | {lead.get('name') or 'Unknown'} | {lead.get('platform') or 'N/A'}",
+            body=format_lead_text(lead),
+            recipients=recipients,
+        )
+        if not sent:
+            logger.error("New-lead email was not sent for user_id=%s", lead.get("user_id"))
+    except Exception:
+        logger.exception("Failed to send new-lead email for user_id=%s", lead.get("user_id"))
 
 
-if __name__ == "__main__":
-    stage_filter = sys.argv[1] if len(sys.argv) > 1 else None
-    path = export_csv(stage=stage_filter)
-    print(f"Exported leads to {path}")
+def notify_contact_complete(
+    lead: dict,
+    recipients: Optional[list[str]] = None,
+) -> None:
+    """Queue a notification email without blocking lead updates."""
+    if recipients is None:
+        configured_recipients = os.getenv("REPORT_TO_EMAIL", "")
+        recipients = [
+            address.strip()
+            for address in configured_recipients.split(",")
+            if address.strip()
+        ] or REPORT_RECIPIENTS
+    if not recipients:
+        raise ValueError("At least one new-lead report recipient must be configured")
+
+    try:
+        threading.Thread(
+            target=_send,
+            args=(lead, recipients),
+            daemon=True,
+            name="contact-complete-email",
+        ).start()
+    except RuntimeError:
+        logger.exception("Could not start new-lead email worker for user_id=%s", lead.get("user_id"))

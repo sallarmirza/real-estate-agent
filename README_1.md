@@ -53,11 +53,11 @@ tanveer-associates-ai-agent/
 │   └── api_schema.py               # Pydantic request/response models
 │
 ├── jobs/
-│   ├── rebuild_knowledge_base_job.py  # CLI: reindex the vector store
-│   └── send_leads_report_job.py       # CLI: email the leads CSV on demand
+│   └── rebuild_knowledge_base_job.py  # CLI: reindex the vector store
 │
 ├── reporting/
-│   └── leads_report.py             # Export leads to CSV
+│   ├── leads_report.py             # Email notification when lead contact details are complete
+│   └── email_module.py             # SMTP delivery
 │
 ├── frontend/
 │   └── index.html                  # Web chat widget
@@ -123,17 +123,17 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tanveer_associates
 # Chroma vector store location (local disk)
 CHROMA_DB_PATH=data/chroma_db
 
-# Optional: emailing the leads report on demand
-SMTP_HOST=
+# Optional: email an alert when a new CRM lead is created
+SMTP_SERVER=
 SMTP_PORT=587
-SMTP_USERNAME=
+SMTP_SENDER=
 SMTP_PASSWORD=
-SMTP_USE_TLS=true
-REPORT_FROM_EMAIL=
-REPORT_TO_EMAIL=
 ```
 
 > **Important:** Replace all placeholder values with your actual credentials.
+> Port `465` uses SMTP over SSL; other configured ports use STARTTLS.
+> The report recipient is currently configured in `reporting/leads_report.py`.
+> A notification is sent once required contact details are complete: WhatsApp requires a name; Messenger and web chat require a name and phone. Email is optional. Ordinary messages do not trigger email.
 
 ### 5. Create the database and build the knowledge base
 
@@ -253,9 +253,8 @@ Send a WhatsApp message to your business number — the AI will reply automatica
 | `DATABASE_URL`                            | PostgreSQL connection string (required)    | —                        |
 | `CHROMA_DB_PATH`                          | ChromaDB storage directory                 | `data/chroma_db`        |
 | `HANDOFF_NOTIFY_WEBHOOK_URL`              | Optional webhook to alert on human handoff | —                        |
-| `SMTP_HOST` / `SMTP_PORT`               | SMTP server for the leads report emailer   | — /`587`               |
-| `SMTP_USERNAME` / `SMTP_PASSWORD`       | SMTP login credentials                     | —                        |
-| `REPORT_FROM_EMAIL` / `REPORT_TO_EMAIL` | Sender/recipient for the leads report      | —                        |
+| `SMTP_SERVER` / `SMTP_PORT`              | SMTP server and port for new-lead alerts    | — / `587`                 |
+| `SMTP_SENDER` / `SMTP_PASSWORD`          | SMTP login and sender email credentials     | —                         |
 
 ## Knowledge Base
 
