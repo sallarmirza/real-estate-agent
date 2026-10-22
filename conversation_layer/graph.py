@@ -28,7 +28,11 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from conversation_layer.state import AgentState
-from conversation_layer.system_prompt import build_system_prompt
+from conversation_layer.system_prompt import (
+    build_system_prompt,
+    clean_reply,
+    ensure_lead_follow_up,
+)
 from conversation_layer.tools import TOOLS
 from memory.long_term_memory import get_lead, increment_message_count
 from memory.short_term_memory import build_thread_id, get_checkpointer
@@ -38,13 +42,28 @@ from langchain_openai import ChatOpenAI
 _llm = ChatOpenAI(
     model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
-).bind_tools(TOOLS)
+).bind_tools(TOOLS, parallel_tool_calls=False)
 
 
 def call_model(state: AgentState) -> dict:
     """The 'agent' node: one LLM turn, grounded by a fresh system prompt."""
     system = SystemMessage(content=build_system_prompt(state))
     response = _llm.invoke([system] + state["messages"])
+    if not response.tool_calls:
+        user_message = next(
+            (
+                message.content
+                for message in reversed(state["messages"])
+                if isinstance(message, HumanMessage) and isinstance(message.content, str)
+            ),
+            "",
+        )
+        reply = clean_reply(response.content)
+        response = response.model_copy(
+            update={
+                "content": ensure_lead_follow_up(reply, state, user_message),
+            }
+        )
     return {"messages": [response]}
 
 
@@ -104,6 +123,7 @@ def run_turn(message: str, platform: str, user_id: str) -> str:
         "purchase_timeline": lead.get("purchase_timeline"),
         "preferred_call_time": lead.get("preferred_call_time"),
         "site_visit_requested": bool(lead.get("site_visit_requested", False)),
+        "site_visit_answered": bool(lead.get("site_visit_answered", False)),
         "lead_stage": lead.get("stage", "new"),
         "lead_score": lead.get("score", 0),
         "handoff_requested": bool(lead.get("handoff_requested", False)),

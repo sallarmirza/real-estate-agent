@@ -33,6 +33,7 @@ class Lead(BaseModel):
     # Scheduling
     preferred_call_time: Optional[str] = None
     site_visit_requested: bool = False
+    site_visit_answered: bool = False
 
     notes: Optional[str] = None
 

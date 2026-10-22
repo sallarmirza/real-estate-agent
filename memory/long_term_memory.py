@@ -10,6 +10,7 @@ Uses a single shared connection pool (psycopg_pool) rather than opening a
 new connection per call, since this runs inside a request-serving app.
 """
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,7 +18,7 @@ from typing import Optional
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from lead_intelligence.lead_scoring import REQUIRED_CONTACT_FIELDS
+from lead_intelligence.lead_scoring import REQUIRED_EMAIL_FIELDS
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://postgres:687254@localhost:5432/tanveer_associates"
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS leads (
     purchase_timeline     TEXT,
     preferred_call_time   TEXT,
     site_visit_requested  BOOLEAN NOT NULL DEFAULT FALSE,
+    site_visit_answered   BOOLEAN NOT NULL DEFAULT FALSE,
     notes                 TEXT,
     stage                 TEXT NOT NULL DEFAULT 'new',
     score                 INTEGER NOT NULL DEFAULT 0,
@@ -50,9 +52,33 @@ CREATE TABLE IF NOT EXISTS leads (
 );
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS contact_reported_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS site_visit_answered BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 _pool: Optional[ConnectionPool] = None
+logger = logging.getLogger(__name__)
+
+
+def _email_complete_condition() -> str:
+    conditions = [
+        "site_visit_answered IS TRUE"
+        if field == "site_visit_answered"
+        else f"NULLIF(BTRIM({field}), '') IS NOT NULL"
+        for field in REQUIRED_EMAIL_FIELDS
+    ]
+    return " AND ".join(conditions)
+
+
+def _missing_email_fields(lead: dict) -> list[str]:
+    return [
+        field
+        for field in REQUIRED_EMAIL_FIELDS
+        if (
+            not lead.get(field)
+            if field == "site_visit_answered"
+            else not str(lead.get(field) or "").strip()
+        )
+    ]
 
 
 def _get_pool() -> ConnectionPool:
@@ -61,20 +87,11 @@ def _get_pool() -> ConnectionPool:
         _pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, open=True)
         with _pool.connection() as conn:
             conn.execute(_SCHEMA)
-            for platform, fields in REQUIRED_CONTACT_FIELDS.items():
-                complete_condition = " AND ".join(
-                    f"NULLIF(BTRIM({field}), '') IS NOT NULL" for field in fields
-                )
-                conn.execute(
-                    f"""
-                    UPDATE leads
-                    SET contact_reported_at = updated_at
-                    WHERE platform = %s
-                      AND contact_reported_at IS NULL
-                      AND {complete_condition}
-                    """,
-                    (platform,),
-                )
+            conn.execute(
+                "UPDATE leads SET contact_reported_at = NULL "
+                "WHERE contact_reported_at IS NOT NULL "
+                f"AND NOT ({_email_complete_condition()})"
+            )
             conn.commit()
     return _pool
 
@@ -109,6 +126,7 @@ def upsert_lead(
     stage: Optional[str] = None,
     score: Optional[int] = None,
     message_count: Optional[int] = None,
+    site_visit_answered: Optional[bool] = None,
 ) -> dict:
     """Create or update a lead record. Only overwrites fields that are provided.
 
@@ -124,14 +142,16 @@ def upsert_lead(
             INSERT INTO leads (
                 user_id, platform, name, phone, email, property_type,
                 city_or_area, budget_range, financing_method, purchase_timeline,
-                preferred_call_time, site_visit_requested, notes, stage, score,
+                preferred_call_time, site_visit_requested, site_visit_answered,
+                notes, stage, score,
                 message_count, contact_reported_at, created_at, updated_at
             )
             VALUES (
                 %(user_id)s, %(platform)s, %(name)s, %(phone)s, %(email)s,
                 %(property_type)s, %(city_or_area)s, %(budget_range)s,
                 %(financing_method)s, %(purchase_timeline)s, %(preferred_call_time)s,
-                COALESCE(%(site_visit_requested)s, FALSE), %(notes)s,
+                COALESCE(%(site_visit_requested)s, FALSE),
+                COALESCE(%(site_visit_answered)s, FALSE), %(notes)s,
                 COALESCE(%(stage)s, 'new'), COALESCE(%(score)s, 0),
                 COALESCE(%(message_count)s, 0), NULL, %(now)s, %(now)s
             )
@@ -146,6 +166,7 @@ def upsert_lead(
                 purchase_timeline    = COALESCE(EXCLUDED.purchase_timeline, leads.purchase_timeline),
                 preferred_call_time  = COALESCE(EXCLUDED.preferred_call_time, leads.preferred_call_time),
                 site_visit_requested = COALESCE(%(site_visit_requested)s, leads.site_visit_requested),
+                site_visit_answered  = COALESCE(%(site_visit_answered)s, leads.site_visit_answered),
                 notes                = COALESCE(EXCLUDED.notes, leads.notes),
                 stage                = COALESCE(EXCLUDED.stage, leads.stage),
                 score                = COALESCE(EXCLUDED.score, leads.score),
@@ -156,15 +177,12 @@ def upsert_lead(
                 "email": email, "property_type": property_type, "city_or_area": city_or_area,
                 "budget_range": budget_range, "financing_method": financing_method,
                 "purchase_timeline": purchase_timeline, "preferred_call_time": preferred_call_time,
-                "site_visit_requested": site_visit_requested, "notes": notes,
+                "site_visit_requested": site_visit_requested,
+                "site_visit_answered": site_visit_answered, "notes": notes,
                 "stage": stage, "score": score, "message_count": message_count, "now": now,
             },
         )
-        required_contact_fields = REQUIRED_CONTACT_FIELDS.get(platform, ["name", "phone"])
-        complete_condition = " AND ".join(
-            f"NULLIF(BTRIM({field}), '') IS NOT NULL"
-            for field in required_contact_fields
-        )
+        complete_condition = _email_complete_condition()
         notification_claim = conn.execute(
             f"""
             UPDATE leads
@@ -186,8 +204,49 @@ def upsert_lead(
     if should_notify:
         from reporting.leads_report import notify_contact_complete
 
+        logger.info(
+            "All required email fields complete; queuing lead notification for %s:%s",
+            platform,
+            user_id,
+        )
         notify_contact_complete(lead)
+    else:
+        missing_fields = _missing_email_fields(lead)
+        if missing_fields:
+            logger.info(
+                "Lead email notification not queued for %s:%s; missing required email fields: %s",
+                platform,
+                user_id,
+                ", ".join(missing_fields),
+            )
+        else:
+            logger.info(
+                "Lead email notification not queued for %s:%s; already reported",
+                platform,
+                user_id,
+            )
     return lead
+
+
+def notify_pending_contact_complete() -> None:
+    """Queue notifications for existing, complete leads not yet reported."""
+    pool = _get_pool()
+    pending_leads = []
+
+    with pool.connection() as conn:
+        complete_condition = _email_complete_condition()
+        rows = conn.execute(
+            f"""
+            SELECT user_id, platform
+            FROM leads
+            WHERE contact_reported_at IS NULL
+              AND {complete_condition}
+            """
+        ).fetchall()
+        pending_leads.extend(rows)
+
+    for user_id, platform in pending_leads:
+        upsert_lead(user_id=user_id, platform=platform)
 
 
 def increment_message_count(user_id: str, platform: str) -> None:
@@ -199,6 +258,17 @@ def increment_message_count(user_id: str, platform: str) -> None:
             "UPDATE leads SET message_count = message_count + 1, updated_at = %s "
             "WHERE user_id = %s AND platform = %s",
             (now, user_id, platform),
+        )
+
+
+def release_contact_notification(user_id: str, platform: str) -> None:
+    """Allow a failed contact-complete email to be retried on a later lead update."""
+    pool = _get_pool()
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE leads SET contact_reported_at = NULL "
+            "WHERE user_id = %s AND platform = %s",
+            (user_id, platform),
         )
         conn.commit()
 

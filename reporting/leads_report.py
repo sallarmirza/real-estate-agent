@@ -1,40 +1,40 @@
 """Email notification when a lead's required contact details are complete."""
 
-import logging
 import os
+import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from .email_module import send_email as dispatch
 
 logger = logging.getLogger(__name__)
 
-REPORT_RECIPIENTS = ["salar@m3hive.com"]
+REPORT_RECIPIENTS = ["fadishah2456@gmail.com"]
 
 # (label, lead key) pairs printed in the email, in this order
 LEAD_FIELDS = [
     ("Name", "name"),
     ("Phone", "phone"),
-    ("Email", "email"),
+   
     ("Platform", "platform"),
     ("Property Type", "property_type"),
     ("City/Area", "city_or_area"),
     ("Budget", "budget_range"),
-    ("Financing", "financing_method"),
-    ("Timeline", "purchase_timeline"),
     ("Preferred Call Time", "preferred_call_time"),
-    ("Site Visit Requested", "site_visit_requested"),
-    ("Score", "score"),
-    ("Handoff Requested", "handoff_requested"),
+    ("Wants to Visit", "site_visit_answered"),
+    
 ]
 
 
 def format_lead_text(lead: dict) -> str:
     """Build the plain-text email body for a single lead."""
     lines = [
-        "LEAD CONTACT DETAILS COMPLETED",
-        f"Received at: {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}",
+        "M3Hive Real Estate AI Agent",
+        "LEAD CONTACT DETAILS ",
+        f"Reported at: {datetime.now(ZoneInfo('Asia/Karachi')):%Y-%m-%d %H:%M PKT}",
+
         "",
     ]
     for label, key in LEAD_FIELDS:
@@ -45,15 +45,52 @@ def format_lead_text(lead: dict) -> str:
 
 def _send(lead: dict, recipients: list[str]) -> None:
     try:
+        from memory.long_term_memory import get_lead
+
+        latest_lead = get_lead(lead["user_id"], lead["platform"])
+        if latest_lead is None:
+            raise RuntimeError(
+                f"Lead was not found in database for {lead['platform']}:{lead['user_id']}"
+            )
+
         sent = dispatch(
-            subject=f"New Lead | {lead.get('name') or 'Unknown'} | {lead.get('platform') or 'N/A'}",
-            body=format_lead_text(lead),
+            subject=(
+                f"New Lead | {latest_lead.get('name') or 'Unknown'} "
+                f"| {latest_lead.get('platform') or 'N/A'}"
+            ),
+            body=format_lead_text(latest_lead),
             recipients=recipients,
         )
-        if not sent:
-            logger.error("New-lead email was not sent for user_id=%s", lead.get("user_id"))
+        if sent:
+            logger.info(
+                "EMAIL SENT (SMTP accepted) for lead user_id=%s, recipient(s)=%s",
+                lead.get("user_id"),
+                ", ".join(recipients),
+            )
+        else:
+            logger.error(
+                "EMAIL NOT SENT for lead user_id=%s: SMTP send returned false",
+                lead.get("user_id"),
+            )
+            _release_notification_claim(lead)
     except Exception:
-        logger.exception("Failed to send new-lead email for user_id=%s", lead.get("user_id"))
+        logger.exception(
+            "EMAIL FAILED for lead user_id=%s",
+            lead.get("user_id"),
+        )
+        _release_notification_claim(lead)
+
+
+def _release_notification_claim(lead: dict) -> None:
+    try:
+        from memory.long_term_memory import release_contact_notification
+
+        release_contact_notification(lead["user_id"], lead["platform"])
+    except Exception:
+        logger.exception(
+            "Could not reset email notification status for user_id=%s",
+            lead.get("user_id"),
+        )
 
 
 def notify_contact_complete(
@@ -72,6 +109,11 @@ def notify_contact_complete(
         raise ValueError("At least one new-lead report recipient must be configured")
 
     try:
+        logger.info(
+            "Queueing new-lead email for user_id=%s, recipient(s)=%s",
+            lead.get("user_id"),
+            ", ".join(recipients),
+        )
         threading.Thread(
             target=_send,
             args=(lead, recipients),
@@ -80,3 +122,4 @@ def notify_contact_complete(
         ).start()
     except RuntimeError:
         logger.exception("Could not start new-lead email worker for user_id=%s", lead.get("user_id"))
+        _release_notification_claim(lead)

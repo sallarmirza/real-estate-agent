@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     purchase_timeline: Optional[str]
     preferred_call_time: Optional[str]
     site_visit_requested: bool
+    site_visit_answered: bool
 
     # Lead intelligence, updated by save_lead_info.
     lead_stage: str   # see lead_intelligence/lead_scoring.py STAGE_* constants

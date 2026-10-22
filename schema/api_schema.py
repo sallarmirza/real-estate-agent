@@ -31,12 +31,12 @@ class LeadOut(BaseModel):
     purchase_timeline: Optional[str] = None
     preferred_call_time: Optional[str] = None
     site_visit_requested: bool = False
+    site_visit_answered: bool = False
     stage: str
     score: int
     message_count: int
     handoff_requested: bool
     updated_at: datetime
-
 
 
 

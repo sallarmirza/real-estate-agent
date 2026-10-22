@@ -24,7 +24,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
 from knowledge_base.retriever import format_context, retrieve_documents
-from lead_intelligence.lead_scoring import classify_lead
+from lead_intelligence.lead_scoring import REQUIRED_EMAIL_FIELDS, classify_lead
 from memory.long_term_memory import mark_handoff, upsert_lead
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -72,6 +72,8 @@ def save_lead_info(
     these, even one field at a time -- it merges with what's already
     known rather than overwriting it. On WhatsApp you do not need to ask
     for a phone number; it is captured automatically from the sender.
+    Record site_visit_requested as True or False only after the user
+    explicitly answers whether they want a site visit.
     After calling this, only ask the user for whatever this tool reports
     as still missing -- never re-ask for something already saved.
     """
@@ -108,15 +110,32 @@ def save_lead_info(
             else state.get("site_visit_requested", False)
         ),
     }
+    site_visit_answered = bool(state.get("site_visit_answered")) or (
+        site_visit_requested is not None
+    )
 
     classification = classify_lead(
         platform=platform,
         message_count=len(state.get("messages", [])),
         **merged,
     )
-    stage, score, missing_fields = (
-        classification["stage"], classification["score"], classification["missing_fields"]
-    )
+    stage, score = classification["stage"], classification["score"]
+    email_field_values = {
+        **merged,
+        "platform": platform,
+        "site_visit_answered": site_visit_answered,
+    }
+    if platform == "whatsapp" and not email_field_values["phone"]:
+        email_field_values["phone"] = user_id
+    missing_email_fields = [
+        field
+        for field in REQUIRED_EMAIL_FIELDS
+        if (
+            not email_field_values[field]
+            if field == "site_visit_answered"
+            else not str(email_field_values[field] or "").strip()
+        )
+    ]
 
     upsert_lead(
         user_id=user_id,
@@ -128,14 +147,21 @@ def save_lead_info(
             1 for message in state.get("messages", [])
             if getattr(message, "type", None) == "human"
         ),
+        site_visit_answered=site_visit_answered,
         **merged,
     )
 
     status_line = f"Lead saved. stage={stage}, score={score}."
-    if missing_fields:
-        status_line += f" Still missing (ask for this next, only what's listed): {', '.join(missing_fields)}."
+    if missing_email_fields:
+        status_line += (
+            " Still missing before the lead email (ask for the first item next): "
+            f"{', '.join(missing_email_fields)}."
+        )
     else:
-        status_line += " All qualification info is complete -- confirm the call time/site visit with the user."
+        status_line += (
+            " All required lead/email fields are complete. Do not ask another "
+            "qualification question."
+        )
     if warnings:
         status_line += " " + " ".join(warnings)
 
@@ -151,6 +177,7 @@ def save_lead_info(
             "purchase_timeline": merged["purchase_timeline"],
             "preferred_call_time": merged["preferred_call_time"],
             "site_visit_requested": merged["site_visit_requested"],
+            "site_visit_answered": site_visit_answered,
             "lead_stage": stage,
             "lead_score": score,
             "messages": [ToolMessage(content=status_line, tool_call_id=tool_call_id)],

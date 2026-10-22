@@ -123,17 +123,19 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/tanveer_associates
 # Chroma vector store location (local disk)
 CHROMA_DB_PATH=data/chroma_db
 
-# Optional: email an alert when a new CRM lead is created
+# Optional: email an alert when required lead contact details are complete
 SMTP_SERVER=
 SMTP_PORT=587
 SMTP_SENDER=
 SMTP_PASSWORD=
+REPORT_TO_EMAIL=
 ```
 
 > **Important:** Replace all placeholder values with your actual credentials.
 > Port `465` uses SMTP over SSL; other configured ports use STARTTLS.
-> The report recipient is currently configured in `reporting/leads_report.py`.
-> A notification is sent once required contact details are complete: WhatsApp requires a name; Messenger and web chat require a name and phone. Email is optional. Ordinary messages do not trigger email.
+> Set `REPORT_TO_EMAIL` to override the recipient configured in `reporting/leads_report.py`.
+> A lead notification is sent only after name, phone, property type, city/area, budget, preferred call time, and an explicit yes/no site-visit answer are saved. Financing method and purchase timeline are optional and do not block the email. The platform is captured automatically. Existing leads are not emailed on startup unless every required field is complete. Ordinary messages do not trigger email.
+> If SMTP delivery fails, the notification remains eligible for retry on a later lead update.
 
 ### 5. Create the database and build the knowledge base
 
@@ -255,6 +257,7 @@ Send a WhatsApp message to your business number — the AI will reply automatica
 | `HANDOFF_NOTIFY_WEBHOOK_URL`              | Optional webhook to alert on human handoff | —                        |
 | `SMTP_SERVER` / `SMTP_PORT`              | SMTP server and port for new-lead alerts    | — / `587`                 |
 | `SMTP_SENDER` / `SMTP_PASSWORD`          | SMTP login and sender email credentials     | —                         |
+| `REPORT_TO_EMAIL`                        | Optional comma-separated new-lead email recipients | configured in code |
 
 ## Knowledge Base
 

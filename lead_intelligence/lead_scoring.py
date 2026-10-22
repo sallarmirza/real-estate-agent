@@ -39,6 +39,17 @@ REQUIRED_CONTACT_FIELDS = {
     "web": ["name", "phone"],
 }
 
+REQUIRED_EMAIL_FIELDS = (
+    "name",
+    "phone",
+    "property_type",
+    "city_or_area",
+    "budget_range",
+    "preferred_call_time",
+    "site_visit_answered",
+    "platform",
+)
+
 
 def _missing_contact_fields(platform: str, name: Optional[str], phone: Optional[str],
                              email: Optional[str]) -> list[str]:
