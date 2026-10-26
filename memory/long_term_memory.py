@@ -17,7 +17,10 @@ from typing import Optional
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from lead_intelligence.lead_scoring import REQUIRED_CONTACT_FIELDS
+from lead_intelligence.lead_scoring import (
+    REQUIRED_CONTACT_FIELDS,
+    STAGE_QUALIFIED_READY_FOR_CALL,
+)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://postgres:687254@localhost:5432/tanveer_associates"
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS leads (
     purchase_timeline     TEXT,
     preferred_call_time   TEXT,
     site_visit_requested  BOOLEAN NOT NULL DEFAULT FALSE,
+    site_visit_answered   BOOLEAN NOT NULL DEFAULT FALSE,
     notes                 TEXT,
     stage                 TEXT NOT NULL DEFAULT 'new',
     score                 INTEGER NOT NULL DEFAULT 0,
@@ -44,12 +48,15 @@ CREATE TABLE IF NOT EXISTS leads (
     handoff_requested     BOOLEAN NOT NULL DEFAULT FALSE,
     handoff_reason        TEXT,
     contact_reported_at   TIMESTAMPTZ,
+    final_stage_reported_at TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL,
     updated_at             TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (user_id, platform)
 );
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS contact_reported_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS site_visit_answered BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS final_stage_reported_at TIMESTAMPTZ;
 """
 
 _pool: Optional[ConnectionPool] = None
@@ -105,6 +112,7 @@ def upsert_lead(
     purchase_timeline: Optional[str] = None,
     preferred_call_time: Optional[str] = None,
     site_visit_requested: Optional[bool] = None,
+    site_visit_answered: Optional[bool] = None,
     notes: Optional[str] = None,
     stage: Optional[str] = None,
     score: Optional[int] = None,
@@ -124,16 +132,18 @@ def upsert_lead(
             INSERT INTO leads (
                 user_id, platform, name, phone, email, property_type,
                 city_or_area, budget_range, financing_method, purchase_timeline,
-                preferred_call_time, site_visit_requested, notes, stage, score,
-                message_count, contact_reported_at, created_at, updated_at
+                preferred_call_time, site_visit_requested, site_visit_answered,
+                notes, stage, score, message_count, contact_reported_at,
+                final_stage_reported_at, created_at, updated_at
             )
             VALUES (
                 %(user_id)s, %(platform)s, %(name)s, %(phone)s, %(email)s,
                 %(property_type)s, %(city_or_area)s, %(budget_range)s,
                 %(financing_method)s, %(purchase_timeline)s, %(preferred_call_time)s,
-                COALESCE(%(site_visit_requested)s, FALSE), %(notes)s,
+                COALESCE(%(site_visit_requested)s, FALSE),
+                COALESCE(%(site_visit_answered)s, FALSE), %(notes)s,
                 COALESCE(%(stage)s, 'new'), COALESCE(%(score)s, 0),
-                COALESCE(%(message_count)s, 0), NULL, %(now)s, %(now)s
+                COALESCE(%(message_count)s, 0), NULL, NULL, %(now)s, %(now)s
             )
             ON CONFLICT (user_id, platform) DO UPDATE SET
                 name                 = COALESCE(EXCLUDED.name, leads.name),
@@ -146,6 +156,7 @@ def upsert_lead(
                 purchase_timeline    = COALESCE(EXCLUDED.purchase_timeline, leads.purchase_timeline),
                 preferred_call_time  = COALESCE(EXCLUDED.preferred_call_time, leads.preferred_call_time),
                 site_visit_requested = COALESCE(%(site_visit_requested)s, leads.site_visit_requested),
+                site_visit_answered  = leads.site_visit_answered OR EXCLUDED.site_visit_answered,
                 notes                = COALESCE(EXCLUDED.notes, leads.notes),
                 stage                = COALESCE(EXCLUDED.stage, leads.stage),
                 score                = COALESCE(EXCLUDED.score, leads.score),
@@ -156,7 +167,8 @@ def upsert_lead(
                 "email": email, "property_type": property_type, "city_or_area": city_or_area,
                 "budget_range": budget_range, "financing_method": financing_method,
                 "purchase_timeline": purchase_timeline, "preferred_call_time": preferred_call_time,
-                "site_visit_requested": site_visit_requested, "notes": notes,
+                "site_visit_requested": site_visit_requested,
+                "site_visit_answered": site_visit_answered, "notes": notes,
                 "stage": stage, "score": score, "message_count": message_count, "now": now,
             },
         )
@@ -168,14 +180,17 @@ def upsert_lead(
         notification_claim = conn.execute(
             f"""
             UPDATE leads
-            SET contact_reported_at = %s
+            SET final_stage_reported_at = %s
             WHERE user_id = %s
               AND platform = %s
-              AND contact_reported_at IS NULL
+              AND final_stage_reported_at IS NULL
+              AND stage = %s
+              AND site_visit_answered IS TRUE
+              AND NULLIF(BTRIM(preferred_call_time), '') IS NOT NULL
               AND {complete_condition}
             RETURNING TRUE
             """,
-            (now, user_id, platform),
+            (now, user_id, platform, STAGE_QUALIFIED_READY_FOR_CALL),
         )
         should_notify = notification_claim.fetchone() is not None
         conn.commit()

@@ -16,7 +16,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/tanveer_associates"
+    "DATABASE_URL"
 )
 
 _pool: Optional[ConnectionPool] = None
