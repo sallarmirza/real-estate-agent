@@ -12,7 +12,7 @@ new connection per call, since this runs inside a request-serving app.
 
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Sequence
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -117,6 +117,7 @@ def upsert_lead(
     stage: Optional[str] = None,
     score: Optional[int] = None,
     message_count: Optional[int] = None,
+    conversation_messages: Optional[Sequence[object]] = None,
 ) -> dict:
     """Create or update a lead record. Only overwrites fields that are provided.
 
@@ -201,7 +202,10 @@ def upsert_lead(
     if should_notify:
         from reporting.leads_report import notify_contact_complete
 
-        notify_contact_complete(lead)
+        notify_contact_complete(
+            lead,
+            conversation_messages=conversation_messages,
+        )
     return lead
 
 

@@ -93,16 +93,7 @@ def send_email(
         )
         msg.attach(part)
 
-    # Debug configuration without printing the password.
-    print(f"SMTP host: {smtp_host!r}")
-    print(f"SMTP port: {smtp_port}")
-    print(f"SMTP username: {smtp_username!r}")
-    print(f"Sender email: {sender_email!r}")
-    print(f"Password loaded: {bool(smtp_password)}")
-    print(
-        "Password length:",
-        len(smtp_password) if smtp_password else 0,
-    )
+ 
 
     try:
         # Port 465 uses implicit SSL.

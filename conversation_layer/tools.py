@@ -129,6 +129,7 @@ def save_lead_info(
             if getattr(message, "type", None) == "human"
         ),
         site_visit_answered=site_visit_requested is not None,
+        conversation_messages=state.get("messages", []),
         **merged,
     )
 

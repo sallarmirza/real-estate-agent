@@ -5,7 +5,7 @@ import os
 import threading
 from datetime import datetime
 from html import escape
-from typing import Optional
+from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from .email_module import send_email as dispatch
@@ -20,12 +20,9 @@ LEAD_FIELDS = [
     ("Name", "name"),
     ("Phone", "phone"),
     ("Email", "email"),
-    ("Platform", "platform"),
     ("Property Type", "property_type"),
     ("City/Area", "city_or_area"),
     ("Budget", "budget_range"),
-    ("Financing", "financing_method"),
-    ("Timeline", "purchase_timeline"),
     ("Preferred Call Time", "preferred_call_time"),
 ]
 
@@ -43,7 +40,61 @@ def _lead_value(lead: dict, key: str) -> str:
     return str(value)
 
 
-def format_lead_text(lead: dict) -> str:
+def _message_text(message: object) -> str:
+    """Extract readable text from a LangChain conversation message."""
+    content = getattr(message, "content", "")
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        text_parts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        return "\n".join(text_parts).strip()
+
+    return ""
+
+
+def summarize_conversation(messages: Optional[Sequence[object]]) -> str:
+    """Create a concise summary from the conversation messages available at lead capture."""
+    transcript = []
+    for message in messages or []:
+        role = getattr(message, "type", "")
+        text = _message_text(message)
+        if role in {"human", "ai"} and text:
+            transcript.append(f"{'Customer' if role == 'human' else 'Agent'}: {text}")
+
+    if not transcript:
+        return "No conversation messages were available when the lead notification was triggered."
+
+    transcript_text = "\n".join(transcript)[-20000:]
+
+    try:
+        from langchain_openai import ChatOpenAI
+
+        response = ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=0,
+        ).invoke(
+            "Summarize this real-estate lead conversation in up to four concise "
+            "bullet points. Cover the customer's property interests, requirements "
+            "or constraints, decisions, and any outstanding follow-up. Use only "
+            "facts stated in the conversation; do not infer missing details.\n\n"
+            f"{transcript_text}"
+        )
+        content = response.content
+        if isinstance(content, str) and content.strip():
+            return "\n".join(content.strip().splitlines()[:4])
+        raise ValueError("Conversation summary model returned no text")
+    except Exception as exc:
+        print(f"Failed to summarize lead conversation: {exc}")
+        return "Recent conversation:\n" + "\n".join(transcript[-4:])
+
+
+def format_lead_text(lead: dict, conversation_summary: str = "") -> str:
     """Build the plain-text fallback email body."""
 
     reported_at = datetime.now(PAKISTAN_TZ).strftime(
@@ -66,6 +117,13 @@ def format_lead_text(lead: dict) -> str:
 
     lines.extend([
         "",
+        "CONVERSATION SUMMARY",
+        "-" * 48,
+        conversation_summary or "No conversation summary available.",
+    ])
+
+    lines.extend([
+        "",
         "-" * 48,
         f"Reported at: {reported_at}",
         "Automated notification by M3Hive Real Estate AI Agent.",
@@ -74,7 +132,7 @@ def format_lead_text(lead: dict) -> str:
     return "\n".join(lines)
 
 
-def format_lead_html(lead: dict) -> str:
+def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
     """Build a styled HTML email displayed directly in the inbox."""
 
     reported_at = datetime.now(PAKISTAN_TZ).strftime(
@@ -121,6 +179,9 @@ def format_lead_html(lead: dict) -> str:
         """)
 
     fields_html = "\n".join(rows)
+    summary_html = escape(
+        conversation_summary or "No conversation summary available."
+    ).replace("\n", "<br>")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -129,7 +190,15 @@ def format_lead_html(lead: dict) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>M3Hive Real Estate AI - New Lead</title>
 </head>
-
+ <p style="
+                                margin: 0 0 7px;
+                                color: #64748b;
+                                font-size: 12px;
+                                line-height: 1.6;
+                            ">
+                                <strong>Reported at:</strong>
+                                {escape(reported_at)}
+                            </p>
 <body style="
     margin: 0;
     padding: 24px 10px;
@@ -344,6 +413,30 @@ def format_lead_html(lead: dict) -> str:
                         </td>
                     </tr>
 
+                    <!-- CONVERSATION SUMMARY -->
+                    <tr>
+                        <td style="padding: 0 24px 24px;">
+                            <h3 style="
+                                margin: 0 0 10px;
+                                font-size: 16px;
+                                color: #163b5c;
+                            ">
+                                Conversation Summary
+                            </h3>
+                            <p style="
+                                margin: 0;
+                                padding: 14px;
+                                background-color: #f8fafc;
+                                border: 1px solid #e8edf3;
+                                color: #172b4d;
+                                font-size: 14px;
+                                line-height: 1.7;
+                            ">
+                                {summary_html}
+                            </p>
+                        </td>
+                    </tr>
+
                     <!-- FOOTER -->
                     <tr>
                         <td style="
@@ -352,15 +445,7 @@ def format_lead_html(lead: dict) -> str:
                             padding: 20px 24px;
                         ">
 
-                            <p style="
-                                margin: 0 0 7px;
-                                color: #64748b;
-                                font-size: 12px;
-                                line-height: 1.6;
-                            ">
-                                <strong>Reported at:</strong>
-                                {escape(reported_at)}
-                            </p>
+                           
 
                             <p style="
                                 margin: 0;
@@ -385,17 +470,22 @@ def format_lead_html(lead: dict) -> str:
 </html>"""
 
 
-def _send(lead: dict, recipients: list[str]) -> None:
+def _send(
+    lead: dict,
+    recipients: list[str],
+    conversation_messages: Optional[Sequence[object]] = None,
+) -> None:
     """Send the HTML report and plain-text fallback."""
 
     try:
         lead_name = _lead_value(lead, "name")
         platform = _lead_value(lead, "platform")
+        conversation_summary = summarize_conversation(conversation_messages)
 
         sent = dispatch(
             subject=f"New Lead | {lead_name} | {platform}",
-            body=format_lead_text(lead),
-            html_body=format_lead_html(lead),
+            body=format_lead_text(lead, conversation_summary),
+            html_body=format_lead_html(lead, conversation_summary),
             recipients=recipients,
         )
 
@@ -410,6 +500,7 @@ def _send(lead: dict, recipients: list[str]) -> None:
 def notify_contact_complete(
     lead: dict,
     recipients: Optional[list[str]] = None,
+    conversation_messages: Optional[Sequence[object]] = None,
 ) -> None:
     """Queue an email notification without blocking lead updates."""
 
@@ -429,7 +520,7 @@ def notify_contact_complete(
 
     thread = threading.Thread(
         target=_send,
-        args=(lead, recipients),
+        args=(lead, recipients, conversation_messages),
         daemon=True,
         name="contact-complete-email",
     )
