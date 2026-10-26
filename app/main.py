@@ -15,7 +15,7 @@ from webhook.messenger_webhook import router as messenger_router
 from webhook.web_chat_webhook import router as web_chat_router
 from webhook.whatsapp_webhook import router as whatsapp_router
 
-logging.basicConfig(level=logging.INFO)
+
 
 app = FastAPI(title="Tanveer Associates AI Assistant", version="2.0.0")
 
