@@ -1,9 +1,14 @@
-"""Facebook Messenger webhook (Meta Graph API, page-level events)."""
+"""Facebook Messenger webhook (Meta Graph API, page-level events).
 
+Returns 200 immediately and processes messages in background tasks —
+same reasoning as whatsapp_webhook.py: Meta retries on slow responses.
+"""
+
+import asyncio
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
 from app.settings import META_VERIFY_TOKEN
 from conversation_layer.graph import run_turn
@@ -25,8 +30,18 @@ def verify_webhook(
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
+async def _process_and_reply(text: str, sender_id: str) -> None:
+    """Run the agent and send the reply. Executed as a background task."""
+    try:
+        reply = await asyncio.to_thread(run_turn, text, "messenger", sender_id)
+    except Exception:
+        logger.exception("Agent failed on Messenger message from %s", sender_id)
+        reply = "Sorry, something went wrong on our end. Please try again shortly."
+    await send_messenger_message(sender_id, reply)
+
+
 @router.post("")
-async def receive_message(request: Request):
+async def receive_message(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
 
     if body.get("object") != "page":
@@ -44,26 +59,18 @@ async def receive_message(request: Request):
                 text = message["text"].strip()
                 if not text:
                     continue
-                reply = await _safe_run_turn(text, sender_id)
-                await send_messenger_message(sender_id, reply)
+                background_tasks.add_task(_process_and_reply, text, sender_id)
 
             elif "attachments" in message:
-                await send_messenger_message(
-                    sender_id, "Sorry, I can only process text messages right now."
+                background_tasks.add_task(
+                    send_messenger_message,
+                    sender_id,
+                    "Sorry, I can only process text messages right now.",
                 )
 
             elif "postback" in event:
                 payload = event["postback"].get("payload", "")
                 if payload:
-                    reply = await _safe_run_turn(payload, sender_id)
-                    await send_messenger_message(sender_id, reply)
+                    background_tasks.add_task(_process_and_reply, payload, sender_id)
 
     return {"status": "ok"}
-
-
-async def _safe_run_turn(text: str, sender_id: str) -> str:
-    try:
-        return run_turn(message=text, platform="messenger", user_id=sender_id)
-    except Exception:
-        logger.exception("Agent failed on Messenger message from %s", sender_id)
-        return "Sorry, something went wrong on our end. Please try again shortly."

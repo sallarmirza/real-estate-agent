@@ -11,6 +11,7 @@ from knowledge_base import retriever as knowledge_base_retriever
 from lead_intelligence.lead_schema import Lead  # noqa: F401 (kept for API docs typing)
 from memory.long_term_memory import list_leads
 from schema.api_schema import LeadOut
+from webhook.dashboard_router import router as dashboard_router
 from webhook.messenger_webhook import router as messenger_router
 from webhook.web_chat_webhook import router as web_chat_router
 from webhook.whatsapp_webhook import router as whatsapp_router
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(whatsapp_router)
 app.include_router(messenger_router)
 app.include_router(web_chat_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/")

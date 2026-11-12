@@ -7,7 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from the project root before anything else reads an env var.
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
+# override=True ensures .env always wins over stale system-level env vars.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env", override=True)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -29,6 +30,13 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
 MESSENGER_PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
+if not MESSENGER_PAGE_ACCESS_TOKEN:
+    import warnings
+    warnings.warn("PAGE_ACCESS_TOKEN is not set — Messenger replies will fail.", stacklevel=1)
 
 # Optional: notify a human when escalate_to_human fires (Slack incoming webhook URL etc).
 HANDOFF_NOTIFY_WEBHOOK_URL = os.getenv("HANDOFF_NOTIFY_WEBHOOK_URL", "")
+
+# Set to "true" in .env to enable email lead notifications.
+# Off by default until the email pipeline is fully tested.
+REPORTING_ENABLED = os.getenv("REPORTING_ENABLED", "false").lower() == "true"

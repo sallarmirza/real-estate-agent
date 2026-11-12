@@ -1,4 +1,3 @@
-
 """HTML email notification when a lead reaches the final stage."""
 
 import os
@@ -26,6 +25,16 @@ LEAD_FIELDS = [
     ("Preferred Call Time", "preferred_call_time"),
 ]
 
+# Raw platform values -> display names shown in the email.
+PLATFORM_LABELS = {
+    "messenger": "FB Messenger",
+    "facebook": "FB Messenger",
+    "facebook_messenger": "FB Messenger",
+    "fb_messenger": "FB Messenger",
+    "whatsapp": "WhatsApp",
+    "instagram": "Instagram",
+}
+
 
 def _lead_value(lead: dict, key: str) -> str:
     """Return a readable value for a lead field."""
@@ -38,6 +47,17 @@ def _lead_value(lead: dict, key: str) -> str:
         value = str(value)
 
     return str(value)
+
+
+def _platform_label(lead: dict) -> str:
+    """Return a display-friendly platform name (e.g. messenger -> FB Messenger)."""
+    raw = _lead_value(lead, "platform")
+
+    if raw == "Not provided":
+        return raw
+
+    key = raw.strip().lower().replace(" ", "_").replace("-", "_")
+    return PLATFORM_LABELS.get(key, raw)
 
 
 def _message_text(message: object) -> str:
@@ -141,7 +161,8 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
 
     # Escape dynamic values to prevent HTML injection.
     lead_name = escape(_lead_value(lead, "name"))
-    platform = escape(_lead_value(lead, "platform"))
+    platform = escape(_platform_label(lead))
+    safe_reported_at = escape(reported_at)
 
     # Build the details table dynamically.
     rows = []
@@ -188,17 +209,8 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>M3Hive Real Estate AI - New Lead</title>
+    <title>LeadHive Real Estate AI - New Lead</title>
 </head>
- <p style="
-                                margin: 0 0 7px;
-                                color: #64748b;
-                                font-size: 12px;
-                                line-height: 1.6;
-                            ">
-                                <strong>Reported at:</strong>
-                                {escape(reported_at)}
-                            </p>
 <body style="
     margin: 0;
     padding: 24px 10px;
@@ -242,7 +254,7 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
                                 color: #cbddec;
                                 font-weight: bold;
                             ">
-                                M3HIVE
+                                LEADHIVE
                             </p>
 
                             <h1 style="
@@ -316,7 +328,7 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
                         </td>
                     </tr>
 
-                    <!-- LEAD SUMMARY -->
+                    <!-- LEAD SUMMARY: name + contact source (platform and reporting time) -->
                     <tr>
                         <td style="padding: 12px 24px;">
 
@@ -378,6 +390,16 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
                                             overflow-wrap: anywhere;
                                         ">
                                             {platform}
+                                        </p>
+
+                                        <!-- Reporting time shown together with the platform -->
+                                        <p style="
+                                            margin: 6px 0 0;
+                                            font-size: 12px;
+                                            line-height: 1.5;
+                                            color: #64748b;
+                                        ">
+                                            Reported at: {safe_reported_at}
                                         </p>
                                     </td>
                                 </tr>
@@ -444,9 +466,6 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
                             border-top: 1px solid #e2e8f0;
                             padding: 20px 24px;
                         ">
-
-                           
-
                             <p style="
                                 margin: 0;
                                 color: #64748b;
@@ -456,7 +475,6 @@ def format_lead_html(lead: dict, conversation_summary: str = "") -> str:
                                 This is an automated notification from
                                 M3Hive Real Estate AI Agent.
                             </p>
-
                         </td>
                     </tr>
 
@@ -479,7 +497,8 @@ def _send(
 
     try:
         lead_name = _lead_value(lead, "name")
-        platform = _lead_value(lead, "platform")
+        # Use the display label so the subject also reads "FB Messenger".
+        platform = _platform_label(lead)
         conversation_summary = summarize_conversation(conversation_messages)
 
         sent = dispatch(

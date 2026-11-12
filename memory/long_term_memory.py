@@ -200,12 +200,12 @@ def upsert_lead(
     if lead is None:
         raise RuntimeError(f"Lead upsert succeeded but lead was not found for {platform}:{user_id}")
     if should_notify:
-        from reporting.leads_report import notify_contact_complete
-
-        notify_contact_complete(
-            lead,
-            conversation_messages=conversation_messages,
-        )
+        from app.settings import REPORTING_ENABLED
+        if REPORTING_ENABLED:
+            from reporting.leads_report import notify_contact_complete
+            notify_contact_complete(lead, conversation_messages=conversation_messages)
+        else:
+            print(f"[reporting disabled] Lead {platform}:{user_id} reached final stage — skipping email.")
     return lead
 
 
