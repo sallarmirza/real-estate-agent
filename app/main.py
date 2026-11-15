@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,13 +13,20 @@ from lead_intelligence.lead_schema import Lead  # noqa: F401 (kept for API docs 
 from memory.long_term_memory import list_leads
 from schema.api_schema import LeadOut
 from webhook.dashboard_router import router as dashboard_router
+from webhook.dashboard_stream import router as stream_router, start_dashboard_stream, stop_dashboard_stream
 from webhook.messenger_webhook import router as messenger_router
 from webhook.web_chat_webhook import router as web_chat_router
 from webhook.whatsapp_webhook import router as whatsapp_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await start_dashboard_stream()
+    yield
+    await stop_dashboard_stream()
 
-app = FastAPI(title="Tanveer Associates AI Assistant", version="2.0.0")
+
+app = FastAPI(title="Tanveer Associates AI Assistant", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +40,7 @@ app.include_router(whatsapp_router)
 app.include_router(messenger_router)
 app.include_router(web_chat_router)
 app.include_router(dashboard_router)
+app.include_router(stream_router)
 
 
 @app.get("/")

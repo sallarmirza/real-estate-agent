@@ -13,9 +13,7 @@ from app.settings import MESSENGER_PAGE_ACCESS_TOKEN, WHATSAPP_TOKEN, WHATSAPP_P
 router = APIRouter(prefix="/estate")
 
 
-@router.get("/stats")
-def get_stats():
-    """Aggregate counts for the dashboard overview cards."""
+def fetch_stats() -> dict:
     pool = _get_pool()
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -32,9 +30,7 @@ def get_stats():
     return dict(row)
 
 
-@router.get("/leads")
-def get_leads(limit: int = Query(default=20, ge=1, le=200)):
-    """Most recently updated leads — key fields only."""
+def fetch_leads(limit: int = 20) -> list:
     pool = _get_pool()
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -61,9 +57,7 @@ def get_leads(limit: int = Query(default=20, ge=1, le=200)):
     return result
 
 
-@router.get("/engagement")
-def get_engagement():
-    """Bucket leads by message_count relative to the most active lead."""
+def fetch_engagement() -> dict:
     pool = _get_pool()
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -109,6 +103,21 @@ def get_engagement():
         b["percentage"] = round((b["users"] / total_users * 100), 2) if total_users > 0 else 0.0
 
     return {"total_users": total_users, "buckets": buckets}
+
+
+@router.get("/stats")
+def get_stats():
+    return fetch_stats()
+
+
+@router.get("/leads")
+def get_leads(limit: int = Query(default=20, ge=1, le=200)):
+    return fetch_leads(limit)
+
+
+@router.get("/engagement")
+def get_engagement():
+    return fetch_engagement()
 
 
 @router.get("/page-info")

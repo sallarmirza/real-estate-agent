@@ -199,6 +199,10 @@ def upsert_lead(
     lead = get_lead(user_id, platform)
     if lead is None:
         raise RuntimeError(f"Lead upsert succeeded but lead was not found for {platform}:{user_id}")
+
+    from webhook.dashboard_events import publish_dashboard_event
+    publish_dashboard_event()
+
     if should_notify:
         from app.settings import REPORTING_ENABLED
         if REPORTING_ENABLED:
@@ -220,6 +224,8 @@ def increment_message_count(user_id: str, platform: str) -> None:
             (now, user_id, platform),
         )
         conn.commit()
+    from webhook.dashboard_events import publish_dashboard_event
+    publish_dashboard_event()
 
 
 def mark_handoff(user_id: str, platform: str, reason: str) -> None:
