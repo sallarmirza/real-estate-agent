@@ -74,6 +74,10 @@ def save_lead_info(
     for a phone number; it is captured automatically from the sender.
     After calling this, only ask the user for whatever this tool reports
     as still missing -- never re-ask for something already saved.
+
+    preferred_call_time: include both the day AND the time exactly as the
+    user stated them, e.g. "Monday 3pm", "Thu 7am", "Saturday morning".
+    Never save only the time without the day when the user mentioned one.
     """
     user_id = state["user_id"]
     platform = state["platform"]
