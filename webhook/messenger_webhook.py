@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 
-from app.settings import META_VERIFY_TOKEN
+from app.settings import META_VERIFY_TOKEN, MESSENGER_PAGE_ID
 from conversation_layer.graph import run_turn
 from webhook.message_sender import send_messenger_message
 
@@ -48,6 +48,8 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
         return {"status": "ignored"}
 
     for entry in body.get("entry", []):
+        if MESSENGER_PAGE_ID and entry.get("id") != MESSENGER_PAGE_ID:
+            continue  # message is for a different page (e.g. visa bot)
         for event in entry.get("messaging", []):
             sender_id = event.get("sender", {}).get("id")
             if not sender_id:

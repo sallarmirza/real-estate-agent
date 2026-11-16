@@ -34,6 +34,8 @@ if not MESSENGER_PAGE_ACCESS_TOKEN:
     import warnings
     warnings.warn("PAGE_ACCESS_TOKEN is not set — Messenger replies will fail.", stacklevel=1)
 
+MESSENGER_PAGE_ID = os.getenv("REAL_ESTATE_PAGE_ID", "")  # only process messages from this page
+
 # Optional: notify a human when escalate_to_human fires (Slack incoming webhook URL etc).
 HANDOFF_NOTIFY_WEBHOOK_URL = os.getenv("HANDOFF_NOTIFY_WEBHOOK_URL", "")
 

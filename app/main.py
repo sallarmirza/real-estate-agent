@@ -10,7 +10,7 @@ from app import settings  # noqa: F401
 from knowledge_base.vector_store import rebuild_vector_store
 from knowledge_base import retriever as knowledge_base_retriever
 from lead_intelligence.lead_schema import Lead  # noqa: F401 (kept for API docs typing)
-from memory.long_term_memory import list_leads
+from memory.long_term_memory import list_leads, _get_pool
 from schema.api_schema import LeadOut
 from webhook.dashboard_router import router as dashboard_router
 from webhook.dashboard_stream import router as stream_router, start_dashboard_stream, stop_dashboard_stream
@@ -21,6 +21,7 @@ from webhook.whatsapp_webhook import router as whatsapp_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _get_pool()  # warm up DB pool + run migrations before first request
     await start_dashboard_stream()
     yield
     await stop_dashboard_stream()
