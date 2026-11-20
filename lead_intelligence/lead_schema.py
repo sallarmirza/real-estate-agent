@@ -35,6 +35,7 @@ class Lead(BaseModel):
     site_visit_requested: bool = False
 
     notes: Optional[str] = None
+    summary: Optional[str] = None
 
     # Derived
     stage: str = "new"

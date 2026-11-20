@@ -1,11 +1,17 @@
 """HTML email notification when a lead reaches the final stage."""
 
 import os
+import re
 import threading
 from datetime import datetime
 from html import escape
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
+
+
+def _apply_bold(text: str) -> str:
+    """Strip **word** markdown bold markers, leaving plain text."""
+    return re.sub(r'\*\*(.+?)\*\*', r'\1', text, flags=re.DOTALL)
 
 from .email_module import send_email as dispatch
 
@@ -107,7 +113,8 @@ def summarize_conversation(messages: Optional[Sequence[object]]) -> str:
         )
         content = response.content
         if isinstance(content, str) and content.strip():
-            return "\n".join(content.strip().splitlines()[:4])
+            cleaned = "\n".join(content.strip().splitlines()[:4])
+            return _apply_bold(cleaned)
         raise ValueError("Conversation summary model returned no text")
     except Exception as exc:
         print(f"Failed to summarize lead conversation: {exc}")

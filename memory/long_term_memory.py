@@ -51,12 +51,14 @@ CREATE TABLE IF NOT EXISTS leads (
     final_stage_reported_at TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL,
     updated_at             TIMESTAMPTZ NOT NULL,
+    summary               TEXT,
     PRIMARY KEY (user_id, platform)
 );
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads (stage);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS contact_reported_at TIMESTAMPTZ;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS site_visit_answered BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS final_stage_reported_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS summary TEXT;
 """
 
 _pool: Optional[ConnectionPool] = None
@@ -161,7 +163,8 @@ def upsert_lead(
                 notes                = COALESCE(EXCLUDED.notes, leads.notes),
                 stage                = COALESCE(EXCLUDED.stage, leads.stage),
                 score                = COALESCE(EXCLUDED.score, leads.score),
-                updated_at           = EXCLUDED.updated_at
+                updated_at           = EXCLUDED.updated_at,
+                summary              = COALESCE(leads.summary, EXCLUDED.summary)
             """,
             {
                 "user_id": user_id, "platform": platform, "name": name, "phone": phone,
@@ -199,6 +202,21 @@ def upsert_lead(
     lead = get_lead(user_id, platform)
     if lead is None:
         raise RuntimeError(f"Lead upsert succeeded but lead was not found for {platform}:{user_id}")
+
+    if conversation_messages and lead.get("name") and lead.get("phone") and not lead.get("summary"):
+        try:
+            from reporting.leads_report import summarize_conversation
+            summary = summarize_conversation(conversation_messages)
+            if summary:
+                with pool.connection() as conn:
+                    conn.execute(
+                        "UPDATE leads SET summary = %s WHERE user_id = %s AND platform = %s AND summary IS NULL",
+                        (summary, user_id, platform),
+                    )
+                    conn.commit()
+                lead["summary"] = summary
+        except Exception as exc:
+            print(f"Summary generation failed for {platform}:{user_id}: {exc}")
 
     from webhook.dashboard_events import publish_dashboard_event
     publish_dashboard_event()

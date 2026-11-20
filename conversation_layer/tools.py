@@ -71,7 +71,10 @@ def save_lead_info(
     site_visit_requested). Call this as soon as the user shares any of
     these, even one field at a time -- it merges with what's already
     known rather than overwriting it. On WhatsApp you do not need to ask
-    for a phone number; it is captured automatically from the sender.
+    for a phone number; it is captured automatically from the sender. On
+    Facebook Messenger and web chat you MUST ask for the phone number --
+    it is never captured automatically on those platforms; never tell a
+    Facebook or web user their number is already known.
     After calling this, only ask the user for whatever this tool reports
     as still missing -- never re-ask for something already saved.
 

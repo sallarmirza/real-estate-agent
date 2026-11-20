@@ -39,7 +39,7 @@ def fetch_leads(limit: int = 20) -> list:
                 SELECT user_id, platform, name, phone,
                        property_type, city_or_area, budget_range,
                        preferred_call_time, stage, score, message_count,
-                       handoff_requested, updated_at
+                       handoff_requested, updated_at, summary
                 FROM leads
                 WHERE NULLIF(TRIM(name), '') IS NOT NULL
                   AND NULLIF(TRIM(phone), '') IS NOT NULL
