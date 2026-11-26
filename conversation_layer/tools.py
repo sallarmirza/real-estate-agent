@@ -125,7 +125,7 @@ def save_lead_info(
         classification["stage"], classification["score"], classification["missing_fields"]
     )
 
-    upsert_lead(
+    lead = upsert_lead(
         user_id=user_id,
         platform=platform,
         notes=notes,
@@ -136,11 +136,20 @@ def save_lead_info(
             if getattr(message, "type", None) == "human"
         ),
         site_visit_answered=site_visit_requested is not None,
-        conversation_messages=state.get("messages", []),
         **merged,
     )
 
-    status_line = f"Lead saved. stage={stage}, score={score}."
+    if lead is None:
+        status_line = "Contact information is incomplete. Lead not saved yet."
+        missing_contact = []
+        if not merged["name"]:
+            missing_contact.append("name")
+        if not merged["phone"]:
+            missing_contact.append("phone")
+        if missing_contact:
+            status_line += " Still missing: " + " and ".join(missing_contact) + "."
+    else:
+        status_line = f"Lead saved. stage={stage}, score={score}."
     if missing_fields:
         status_line += f" Still missing (ask for this next, only what's listed): {', '.join(missing_fields)}."
     else:

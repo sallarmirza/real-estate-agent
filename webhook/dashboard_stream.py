@@ -109,6 +109,8 @@ async def dashboard_stream(request: Request):
 
     async def event_gen():
         try:
+            payload = await run_in_threadpool(_build_payload)
+            yield f"data: {payload}\n\n"
             while True:
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)

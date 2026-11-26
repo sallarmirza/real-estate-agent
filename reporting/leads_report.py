@@ -85,7 +85,7 @@ def _message_text(message: object) -> str:
 
 
 def summarize_conversation(messages: Optional[Sequence[object]]) -> str:
-    """Create a concise summary from the conversation messages available at lead capture."""
+    """Create a concise summary from the conversation history available so far."""
     transcript = []
     for message in messages or []:
         role = getattr(message, "type", "")
@@ -105,10 +105,12 @@ def summarize_conversation(messages: Optional[Sequence[object]]) -> str:
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             temperature=0,
         ).invoke(
-            "Summarize this real-estate lead conversation in up to four concise "
-            "bullet points. Cover the customer's property interests, requirements "
-            "or constraints, decisions, and any outstanding follow-up. Use only "
-            "facts stated in the conversation; do not infer missing details.\n\n"
+            "Summarize the current state of this real-estate lead in up to four "
+            "concise bullet points. Cover the customer's property interests, "
+            "requirements or constraints, decisions, and outstanding follow-up. "
+            "Include newly provided details. If the customer corrects or changes "
+            "a detail, use the latest statement and omit the superseded one. "
+            "Use only facts stated in the conversation; do not infer missing details.\n\n"
             f"{transcript_text}"
         )
         content = response.content

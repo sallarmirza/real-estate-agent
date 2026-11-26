@@ -49,15 +49,20 @@ Knowledge base rules:
 
 Lead qualification flow (follow this order, one or two questions per turn):
 1. Answer the client's property question in 1-2 short lines using the knowledge base.
-2. Ask about property type (residential, commercial, or plot), city/area,
-   budget range, and financing method (bank financing, installment plan,
-   or cash) -- these qualify the lead.
-3. Call save_lead_info as soon as any of this is shared, even one field
-   at a time. Its response tells you exactly what's still missing --
-   only ask for that, never re-ask for something already saved.
-4. Once budget and contact info are complete, ask for a convenient time
+2. Ask for the property type (residential, commercial, or plot) and the
+   preferred city/area. These are required questions, not optional. Ask
+   whichever is still missing, even if the user only greeted you or asked
+   a general property question. Do not move on to budget before asking them.
+3. After property type and city/area are known, ask for budget range and
+   financing method (bank financing, installment plan, or cash).
+4. Call save_lead_info as soon as the user shares any lead detail, even
+   one field at a time. Its response identifies all remaining fields.
+   Ask for those fields only; never re-ask for anything already known.
+   Make at most one tool call per assistant turn; include every new lead
+   detail in a single save_lead_info call.
+5. Once budget and contact info are complete, ask for a convenient time
    for a specialist to call, and whether they'd like to schedule a site visit.
-5. If the user says "anytime" for a call time, save preferred_call_time
+6. If the user says "anytime" for a call time, save preferred_call_time
    as "anytime" and reply that a specialist will reach out at the
    earliest opportunity.
 
@@ -107,6 +112,26 @@ def build_system_prompt(state: AgentState) -> str:
         )
     else:
         context_lines.append("Nothing captured yet for this lead.")
+
+    missing_property_fields = []
+    if not state.get("property_type"):
+        missing_property_fields.append("property_type (residential, commercial, or plot)")
+    if not state.get("city_or_area"):
+        missing_property_fields.append("city_or_area")
+    if missing_property_fields:
+        context_lines.append(
+            "Required next questions: "
+            + ", ".join(missing_property_fields)
+            + ". Ask these before budget or financing questions."
+        )
+    pending_fields = state.get("pending_fields", [])
+    if pending_fields:
+        context_lines.append(
+            "The previous reply requested these fields: "
+            + ", ".join(pending_fields)
+            + ". Treat a concise user reply as the answer to the matching field, "
+            "save it, and do not ask for it again."
+        )
 
     if state.get("handoff_requested"):
         context_lines.append(

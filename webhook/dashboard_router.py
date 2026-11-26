@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Query
 from psycopg.rows import dict_row
 
-from memory.long_term_memory import _get_pool
+from memory.long_term_memory import _get_pool, mask_phone_numbers
 from app.settings import MESSENGER_PAGE_ACCESS_TOKEN, WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID
 
 router = APIRouter(prefix="/estate")
@@ -19,12 +19,22 @@ def fetch_stats() -> dict:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("""
                 SELECT
-                    COUNT(*)                                                             AS total_leads,
-                    COUNT(CASE WHEN stage NOT IN ('new', 'not_interested') THEN 1 END)  AS engaged_users,
-                    COUNT(CASE WHEN stage LIKE 'qualified%%' THEN 1 END)                AS qualified_leads,
-                    COUNT(CASE WHEN handoff_requested = TRUE THEN 1 END)                AS handoff_requested,
-                    COALESCE(SUM(message_count), 0)                                     AS total_messages
-                FROM leads
+                    (SELECT COUNT(*)
+                     FROM leads
+                     WHERE NULLIF(TRIM(name), '') IS NOT NULL
+                       AND NULLIF(TRIM(phone), '') IS NOT NULL) AS total_leads,
+                    (SELECT COUNT(*) FROM user_activity) AS engaged_users,
+                    (SELECT COUNT(*)
+                     FROM leads
+                     WHERE stage LIKE 'qualified%%'
+                       AND NULLIF(TRIM(name), '') IS NOT NULL
+                       AND NULLIF(TRIM(phone), '') IS NOT NULL) AS qualified_leads,
+                    (SELECT COUNT(*)
+                     FROM leads
+                     WHERE handoff_requested = TRUE
+                       AND NULLIF(TRIM(name), '') IS NOT NULL
+                       AND NULLIF(TRIM(phone), '') IS NOT NULL) AS handoff_requested,
+                    (SELECT COALESCE(SUM(message_count), 0) FROM user_activity) AS total_messages
             """)
             row = cur.fetchone()
     return dict(row)
@@ -53,6 +63,8 @@ def fetch_leads(limit: int = 20) -> list:
     result = []
     for row in rows:
         r = dict(row)
+        if r.get("summary"):
+            r["summary"] = mask_phone_numbers(r["summary"])
         if r.get("updated_at") is not None:
             r["updated_at"] = r["updated_at"].isoformat()
         result.append(r)
@@ -64,10 +76,15 @@ def fetch_engagement() -> dict:
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("""
-                SELECT user_id, platform, message_count,
-                       (stage LIKE 'qualified%%') AS is_qualified
-                FROM leads
-                ORDER BY message_count DESC
+                SELECT activity.user_id, activity.platform, activity.message_count,
+                       (leads.stage LIKE 'qualified%%') AS is_qualified
+                FROM user_activity AS activity
+                LEFT JOIN leads
+                  ON leads.user_id = activity.user_id
+                 AND leads.platform = activity.platform
+                 AND NULLIF(TRIM(leads.name), '') IS NOT NULL
+                 AND NULLIF(TRIM(leads.phone), '') IS NOT NULL
+                ORDER BY activity.message_count DESC
             """)
             rows = cur.fetchall()
 

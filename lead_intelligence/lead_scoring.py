@@ -71,22 +71,31 @@ def classify_lead(
     """
     contact_missing = _missing_contact_fields(platform, name, phone, email)
     budget_confirmed = bool(budget_range)
+    missing_qualification = []
+    if not property_type:
+        missing_qualification.append("property_type")
+    if not city_or_area:
+        missing_qualification.append("city_or_area")
+    if not budget_range:
+        missing_qualification.append("budget_range")
+    if not financing_method:
+        missing_qualification.append("financing_method")
 
     if not budget_confirmed:
         # A property question was likely asked, but we don't yet know if this
         # is a real buyer -- per the knowledge base this is "not_interested"
         # (i.e. not yet qualified), not a judgment that they dislike the property.
         stage = STAGE_NOT_INTERESTED
-        missing = ["budget_range", "financing_method"] + contact_missing
+        missing = missing_qualification + contact_missing
     elif contact_missing:
         stage = STAGE_READY_FOR_CALL_MISSING_CONTACT
-        missing = contact_missing
+        missing = missing_qualification + contact_missing
     elif not preferred_call_time:
         stage = STAGE_QUALIFIED_MISSING_CALL_TIME
-        missing = ["preferred_call_time"]
+        missing = missing_qualification + ["preferred_call_time"]
     else:
         stage = STAGE_QUALIFIED_READY_FOR_CALL
-        missing = []
+        missing = missing_qualification
 
     # Score is purely for sorting/reporting -- reward completeness so a
     # sales team can sort "leads" by how close they are to a booked call.

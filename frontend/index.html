@@ -583,7 +583,7 @@
   // CONFIG — point this at your FastAPI backend (see original
   // Streamlit app: POST {API_URL}/chat  -> { message, history })
   // ---------------------------------------------------------
-  const API_URL = "http://localhost:8000";
+  const API_URL = window.location.origin;
   const MAX_HISTORY_MESSAGES = 5; // pairs of user/assistant turns
 
   const launcher   = document.getElementById('gfLauncher');

@@ -48,3 +48,6 @@ class AgentState(TypedDict):
     # Human handoff flag, set by the escalate_to_human tool.
     handoff_requested: bool
     handoff_reason: Optional[str]
+
+    # Qualification fields requested in the previous assistant reply.
+    pending_fields: list[str]

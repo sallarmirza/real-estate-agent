@@ -11,6 +11,8 @@ new connection per call, since this runs inside a request-serving app.
 """
 
 import os
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
@@ -59,9 +61,35 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS contact_reported_at TIMESTAMPTZ;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS site_visit_answered BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS final_stage_reported_at TIMESTAMPTZ;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS summary TEXT;
+CREATE TABLE IF NOT EXISTS user_activity (
+    user_id          TEXT NOT NULL,
+    platform         TEXT NOT NULL,
+    message_count    INTEGER NOT NULL DEFAULT 0,
+    first_message_at TIMESTAMPTZ NOT NULL,
+    last_message_at  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, platform)
+);
+INSERT INTO user_activity (user_id, platform, message_count, first_message_at, last_message_at)
+SELECT user_id, platform, message_count, created_at, updated_at
+FROM leads
+WHERE message_count > 0
+ON CONFLICT (user_id, platform) DO NOTHING;
 """
 
 _pool: Optional[ConnectionPool] = None
+logger = logging.getLogger(__name__)
+_PHONE_PATTERN = re.compile(r"(?<!\w)\+?\d(?:[\s().-]*\d){9,14}(?!\w)")
+
+
+def mask_phone_numbers(text: str) -> str:
+    """Keep only the first four and last three digits of phone numbers."""
+    def mask(match: re.Match) -> str:
+        digits = re.sub(r"\D", "", match.group())
+        if len(digits) == 12 and digits.startswith("92"):
+            digits = "0" + digits[2:]
+        return f"{digits[:4]} **** {digits[-3:]}"
+
+    return _PHONE_PATTERN.sub(mask, text)
 
 
 def _get_pool() -> ConnectionPool:
@@ -119,8 +147,7 @@ def upsert_lead(
     stage: Optional[str] = None,
     score: Optional[int] = None,
     message_count: Optional[int] = None,
-    conversation_messages: Optional[Sequence[object]] = None,
-) -> dict:
+) -> Optional[dict]:
     """Create or update a lead record. Only overwrites fields that are provided.
 
     Uses PostgreSQL's INSERT ... ON CONFLICT for a proper atomic upsert
@@ -128,6 +155,12 @@ def upsert_lead(
     """
     now = datetime.now(timezone.utc)
     pool = _get_pool()
+
+    existing = get_lead(user_id, platform) or {}
+    effective_name = name or existing.get("name")
+    effective_phone = phone or existing.get("phone")
+    if not (effective_name and effective_name.strip() and effective_phone and effective_phone.strip()):
+        return None
 
     with pool.connection() as conn:
         conn.execute(
@@ -146,7 +179,11 @@ def upsert_lead(
                 COALESCE(%(site_visit_requested)s, FALSE),
                 COALESCE(%(site_visit_answered)s, FALSE), %(notes)s,
                 COALESCE(%(stage)s, 'new'), COALESCE(%(score)s, 0),
-                COALESCE(%(message_count)s, 0), NULL, NULL, %(now)s, %(now)s
+                COALESCE(
+                    (SELECT message_count FROM user_activity
+                     WHERE user_id = %(user_id)s AND platform = %(platform)s),
+                    %(message_count)s, 0
+                ), NULL, NULL, %(now)s, %(now)s
             )
             ON CONFLICT (user_id, platform) DO UPDATE SET
                 name                 = COALESCE(EXCLUDED.name, leads.name),
@@ -163,6 +200,11 @@ def upsert_lead(
                 notes                = COALESCE(EXCLUDED.notes, leads.notes),
                 stage                = COALESCE(EXCLUDED.stage, leads.stage),
                 score                = COALESCE(EXCLUDED.score, leads.score),
+                message_count        = COALESCE(
+                    (SELECT message_count FROM user_activity
+                     WHERE user_id = %(user_id)s AND platform = %(platform)s),
+                    EXCLUDED.message_count
+                ),
                 updated_at           = EXCLUDED.updated_at,
                 summary              = COALESCE(leads.summary, EXCLUDED.summary)
             """,
@@ -203,24 +245,6 @@ def upsert_lead(
     if lead is None:
         raise RuntimeError(f"Lead upsert succeeded but lead was not found for {platform}:{user_id}")
 
-    if conversation_messages and lead.get("name") and lead.get("phone") and not lead.get("summary"):
-        try:
-            from reporting.leads_report import summarize_conversation
-            summary = summarize_conversation(conversation_messages)
-            if summary:
-                with pool.connection() as conn:
-                    conn.execute(
-                        "UPDATE leads SET summary = %s WHERE user_id = %s AND platform = %s AND summary IS NULL",
-                        (summary, user_id, platform),
-                    )
-                    conn.commit()
-                lead["summary"] = summary
-        except Exception as exc:
-            print(f"Summary generation failed for {platform}:{user_id}: {exc}")
-
-    from webhook.dashboard_events import publish_dashboard_event
-    publish_dashboard_event()
-
     if should_notify:
         from app.settings import REPORTING_ENABLED
         if REPORTING_ENABLED:
@@ -231,15 +255,73 @@ def upsert_lead(
     return lead
 
 
+def update_lead_summary(
+    user_id: str,
+    platform: str,
+    conversation_messages: Sequence[object],
+) -> Optional[str]:
+    """Refresh a complete lead's summary and notify the live dashboard."""
+    lead = get_lead(user_id, platform)
+    if not lead or not (lead.get("name") or "").strip() or not (lead.get("phone") or "").strip():
+        return None
+
+    try:
+        from reporting.leads_report import summarize_conversation
+
+        summary = summarize_conversation(conversation_messages)
+        if not summary:
+            return None
+        summary = mask_phone_numbers(summary)
+        now = datetime.now(timezone.utc)
+        pool = _get_pool()
+        with pool.connection() as conn:
+            conn.execute(
+                """
+                UPDATE leads
+                SET summary = %s, updated_at = %s
+                WHERE user_id = %s AND platform = %s
+                  AND NULLIF(BTRIM(name), '') IS NOT NULL
+                  AND NULLIF(BTRIM(phone), '') IS NOT NULL
+                """,
+                (summary, now, user_id, platform),
+            )
+            conn.commit()
+        from webhook.dashboard_events import publish_dashboard_event
+        publish_dashboard_event()
+        return summary
+    except Exception:
+        logger.exception("Lead summary refresh failed for %s:%s", platform, user_id)
+        return None
+
+
 def increment_message_count(user_id: str, platform: str) -> None:
-    """Bump an existing lead's message counter without creating an empty lead."""
+    """Track every inbound user, whether or not they have shared contact details."""
     now = datetime.now(timezone.utc)
     pool = _get_pool()
     with pool.connection() as conn:
         conn.execute(
-            "UPDATE leads SET message_count = message_count + 1, updated_at = %s "
-            "WHERE user_id = %s AND platform = %s",
-            (now, user_id, platform),
+            """
+            INSERT INTO user_activity (
+                user_id, platform, message_count, first_message_at, last_message_at
+            )
+            VALUES (%s, %s, 1, %s, %s)
+            ON CONFLICT (user_id, platform) DO UPDATE SET
+                message_count = user_activity.message_count + 1,
+                last_message_at = EXCLUDED.last_message_at
+            """,
+            (user_id, platform, now, now),
+        )
+        conn.execute(
+            """
+            UPDATE leads
+            SET message_count = (
+                    SELECT message_count FROM user_activity
+                    WHERE user_id = %s AND platform = %s
+                ),
+                updated_at = %s
+            WHERE user_id = %s AND platform = %s
+            """,
+            (user_id, platform, now, user_id, platform),
         )
         conn.commit()
     from webhook.dashboard_events import publish_dashboard_event
@@ -257,6 +339,8 @@ def mark_handoff(user_id: str, platform: str, reason: str) -> None:
             (reason, now, user_id, platform),
         )
         conn.commit()
+    from webhook.dashboard_events import publish_dashboard_event
+    publish_dashboard_event()
 
 
 def list_leads(stage: Optional[str] = None) -> list[dict]:
